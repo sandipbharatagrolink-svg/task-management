@@ -1,0 +1,954 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+import Link from 'next/link';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Separator } from '@/components/ui/separator';
+import { Badge } from '@/components/ui/badge';
+import DeadlineTimer from '@/components/DeadlineTimer';
+import {
+  CheckSquare,
+  Plus,
+  X,
+  Calendar,
+  AlertCircle,
+  Users,
+  Loader2,
+  Clock,
+  ListChecks,
+  Trash2,
+  Filter,
+  XCircle
+} from 'lucide-react';
+import { cn } from '@/lib/utils';
+
+import { authenticatedFetch } from '@/lib/auth-client';
+export default function TasksPage() {
+  const [tasks, setTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [formData, setFormData] = useState({
+    title: '',
+    description: '',
+    priority: 'medium',
+    deadline: '',
+    assigned_users: [],
+    subtasks: []
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const [newSubtask, setNewSubtask] = useState({ title: '', description: '' });
+  const [userRole, setUserRole] = useState(null);
+  const [userInfo, setUserInfo] = useState(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [taskToDelete, setTaskToDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  
+  // Filter states
+  const [filters, setFilters] = useState({
+    status: '',
+    assigned_to: '',
+    priority: '',
+    department: '',
+    date_from: '',
+    date_to: ''
+  });
+  const [departments, setDepartments] = useState([]);
+
+  useEffect(() => {
+    fetchTasks();
+    fetchUserRole();
+  }, []);
+
+  useEffect(() => {
+    if (userRole) {
+      fetchEmployees();
+      fetchDepartments();
+    }
+  }, [userRole]);
+
+  useEffect(() => {
+    fetchTasks();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters]);
+
+  const [employees, setEmployees] = useState([]);
+
+  const fetchTasks = async () => {
+    try {
+      setLoading(true);
+      // Build query string from filters
+      const params = new URLSearchParams();
+      if (filters.status) params.append('status', filters.status);
+      if (filters.assigned_to) params.append('assigned_to', filters.assigned_to);
+      if (filters.priority) params.append('priority', filters.priority);
+      if (filters.department) params.append('department', filters.department);
+      if (filters.date_from) params.append('date_from', filters.date_from);
+      if (filters.date_to) params.append('date_to', filters.date_to);
+      
+      const queryString = params.toString();
+      const url = queryString ? `/api/tasks?${queryString}` : '/api/tasks';
+      
+      const res = await authenticatedFetch(url);
+      const data = await res.json();
+      setTasks(data.tasks || []);
+    } catch (err) {
+      console.error('Failed to fetch tasks:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchEmployees = async () => {
+    try {
+      // For managers, the API automatically filters to show only their direct team members (manager_id)
+      // For admins, it shows all employees
+      const res = await authenticatedFetch('/api/employees');
+      const data = await res.json();
+      setEmployees(data.employees || []);
+    } catch (err) {
+      console.error('Failed to fetch employees:', err);
+    }
+  };
+
+  const fetchDepartments = async () => {
+    try {
+      const res = await authenticatedFetch('/api/employees');
+      const data = await res.json();
+      if (data.employees) {
+        const uniqueDepts = [...new Set(data.employees.map(emp => emp.department).filter(Boolean))];
+        setDepartments(uniqueDepts.sort());
+      }
+    } catch (err) {
+      console.error('Failed to fetch departments:', err);
+    }
+  };
+
+  const handleFilterChange = (filterName, value) => {
+    setFilters(prev => ({
+      ...prev,
+      [filterName]: value === 'all' ? '' : value
+    }));
+  };
+
+  const clearFilters = () => {
+    setFilters({
+      status: '',
+      assigned_to: '',
+      priority: '',
+      department: '',
+      date_from: '',
+      date_to: ''
+    });
+  };
+
+  const hasActiveFilters = Object.values(filters).some(value => value !== '');
+
+  const fetchUserRole = async () => {
+    try {
+      const res = await authenticatedFetch('/api/auth/check');
+      const data = await res.json();
+      if (data.authenticated && data.user) {
+        setUserRole(data.user.role);
+        setUserInfo(data.user);
+      }
+    } catch (err) {
+      console.error('Failed to fetch user role:', err);
+    }
+  };
+
+  const isAdmin = userRole === 'Super Admin' || userRole === 'Admin';
+  const canDelete = isAdmin || userRole === 'Manager' || userRole === 'HR';
+  const canCreate = isAdmin || userRole === 'Manager' || userRole === 'HR';
+
+  // Get current IST time in datetime-local format (YYYY-MM-DDTHH:mm)
+  const getCurrentISTDateTime = () => {
+    const now = new Date();
+    // Get IST time components using Intl.DateTimeFormat
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    });
+    
+    const parts = formatter.formatToParts(now);
+    const year = parts.find(p => p.type === 'year').value;
+    const month = parts.find(p => p.type === 'month').value;
+    const day = parts.find(p => p.type === 'day').value;
+    const hour = parts.find(p => p.type === 'hour').value;
+    const minute = parts.find(p => p.type === 'minute').value;
+    
+    // Format as datetime-local (YYYY-MM-DDTHH:mm)
+    return `${year}-${month}-${day}T${hour}:${minute}`;
+  };
+
+  const handleDeleteClick = (task) => {
+    setTaskToDelete(task);
+    setDeleteDialogOpen(true);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!taskToDelete) return;
+
+    setDeleting(true);
+    try {
+      const res = await authenticatedFetch(`/api/tasks/${taskToDelete.id}`, {
+        method: 'DELETE',
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        setDeleteDialogOpen(false);
+        setTaskToDelete(null);
+        fetchTasks(); // Refresh tasks list
+      } else {
+        setError(data.error || 'Failed to delete task');
+      }
+    } catch (err) {
+      console.error('Failed to delete task:', err);
+      setError('Network error. Please try again.');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const handleDeleteCancel = () => {
+    setDeleteDialogOpen(false);
+    setTaskToDelete(null);
+  };
+
+  const handleCreate = async (e) => {
+    e.preventDefault();
+    setError('');
+    setSubmitting(true);
+    
+    try {
+      // Convert deadline from IST to UTC for database storage
+      const taskData = { ...formData };
+      if (taskData.deadline) {
+        // datetime-local format: YYYY-MM-DDTHH:mm (no timezone)
+        // Treat input as IST (UTC+5:30) and convert to UTC for storage
+        const deadlineStr = taskData.deadline; // e.g., "2024-01-15T14:30"
+        
+        // Create a date object treating the input as IST
+        const istDate = new Date(deadlineStr + '+05:30');
+        
+        // Convert to UTC ISO string for database storage
+        taskData.deadline = istDate.toISOString();
+      }
+      
+      const res = await authenticatedFetch('/api/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(taskData),
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        setShowCreateModal(false);
+        setFormData({
+          title: '',
+          description: '',
+          priority: 'medium',
+          deadline: '',
+          assigned_users: [],
+          subtasks: []
+        });
+        setNewSubtask({ title: '', description: '' });
+        fetchTasks();
+      } else {
+        setError(data.error || 'Failed to create task');
+      }
+    } catch (err) {
+      setError('Network error. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const addSubtask = () => {
+    if (newSubtask.title.trim()) {
+      setFormData({
+        ...formData,
+        subtasks: [...formData.subtasks, { ...newSubtask }]
+      });
+      setNewSubtask({ title: '', description: '' });
+    }
+  };
+
+  const removeSubtask = (index) => {
+    setFormData({
+      ...formData,
+      subtasks: formData.subtasks.filter((_, i) => i !== index)
+    });
+  };
+
+  const handleClose = () => {
+    if (!submitting) {
+      setShowCreateModal(false);
+      setFormData({
+        title: '',
+        description: '',
+        priority: 'medium',
+        deadline: '',
+        assigned_users: [],
+        subtasks: []
+      });
+      setNewSubtask({ title: '', description: '' });
+      setError('');
+    }
+  };
+
+  const getPriorityColor = (priority) => {
+    const colors = {
+      low: 'bg-gray-100 text-gray-800',
+      medium: 'bg-blue-100 text-blue-800',
+      high: 'bg-orange-100 text-orange-800',
+      critical: 'bg-red-100 text-red-800'
+    };
+    return colors[priority] || colors.medium;
+  };
+
+  const getStatusColor = (status) => {
+    const colors = {
+      pending: 'bg-yellow-100 text-yellow-800',
+      in_progress: 'bg-blue-100 text-blue-800',
+      completed: 'bg-green-100 text-green-800',
+      cancelled: 'bg-red-100 text-red-800'
+    };
+    return colors[status] || colors.pending;
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-3xl font-bold flex items-center gap-2">
+            <CheckSquare className="h-8 w-8" />
+            Tasks
+          </h1>
+          <p className="text-muted-foreground mt-1">Manage and track all tasks</p>
+        </div>
+        {canCreate && (
+          <Button onClick={() => setShowCreateModal(true)} className="gap-2" size="lg">
+            <Plus className="h-4 w-4" />
+            Create Task
+          </Button>
+        )}
+      </div>
+
+      {/* Filters */}
+      <Card>
+        <CardContent className="pt-6">
+          <div className="flex items-center gap-2 mb-4">
+            <Filter className="h-5 w-5 text-muted-foreground" />
+            <h3 className="text-lg font-semibold">Filters</h3>
+            {hasActiveFilters && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={clearFilters}
+                className="ml-auto gap-2"
+              >
+                <XCircle className="h-4 w-4" />
+                Clear Filters
+              </Button>
+            )}
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="filter-status" className="text-sm font-medium">
+                Status
+              </Label>
+              <Select
+                value={filters.status || 'all'}
+                onValueChange={(value) => handleFilterChange('status', value)}
+              >
+                <SelectTrigger id="filter-status" className="h-10">
+                  <SelectValue placeholder="All Statuses" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Statuses</SelectItem>
+                  <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="in_progress">In Progress</SelectItem>
+                  <SelectItem value="completed">Completed</SelectItem>
+                  <SelectItem value="cancelled">Cancelled</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="filter-priority" className="text-sm font-medium">
+                Priority
+              </Label>
+              <Select
+                value={filters.priority || 'all'}
+                onValueChange={(value) => handleFilterChange('priority', value)}
+              >
+                <SelectTrigger id="filter-priority" className="h-10">
+                  <SelectValue placeholder="All Priorities" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Priorities</SelectItem>
+                  <SelectItem value="low">Low</SelectItem>
+                  <SelectItem value="medium">Medium</SelectItem>
+                  <SelectItem value="high">High</SelectItem>
+                  <SelectItem value="critical">Critical</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="filter-assigned" className="text-sm font-medium">
+                Assigned To
+              </Label>
+              <Select
+                value={filters.assigned_to || 'all'}
+                onValueChange={(value) => handleFilterChange('assigned_to', value)}
+              >
+                <SelectTrigger id="filter-assigned" className="h-10">
+                  <SelectValue placeholder="All Employees" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Employees</SelectItem>
+                  {employees
+                    .filter(emp => emp.role !== 'Super Admin' && emp.is_active !== 0)
+                    .sort((a, b) => a.name.localeCompare(b.name))
+                    .map(emp => (
+                      <SelectItem key={emp.id} value={emp.id.toString()}>
+                        {emp.name} {emp.department ? `(${emp.department})` : ''}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="filter-department" className="text-sm font-medium">
+                Department
+              </Label>
+              <Select
+                value={filters.department || 'all'}
+                onValueChange={(value) => handleFilterChange('department', value)}
+              >
+                <SelectTrigger id="filter-department" className="h-10">
+                  <SelectValue placeholder="All Departments" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Departments</SelectItem>
+                  {departments.map(dept => (
+                    <SelectItem key={dept} value={dept}>
+                      {dept}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="filter-date-from" className="text-sm font-medium flex items-center gap-2">
+                <Calendar className="h-4 w-4 text-muted-foreground" />
+                Date From
+              </Label>
+              <Input
+                id="filter-date-from"
+                type="date"
+                value={filters.date_from}
+                onChange={(e) => handleFilterChange('date_from', e.target.value)}
+                className="h-10"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="filter-date-to" className="text-sm font-medium flex items-center gap-2">
+                <Calendar className="h-4 w-4 text-muted-foreground" />
+                Date To
+              </Label>
+              <Input
+                id="filter-date-to"
+                type="date"
+                value={filters.date_to}
+                onChange={(e) => handleFilterChange('date_to', e.target.value)}
+                min={filters.date_from || undefined}
+                className="h-10"
+              />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {tasks.length === 0 ? (
+        <Card>
+          <CardContent className="pt-6">
+            <div className="text-center py-12">
+              <CheckSquare className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+              <p className="text-muted-foreground">No tasks found. Create your first task to get started.</p>
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {tasks.map((task) => (
+            <Card key={task.id} className="hover:shadow-lg transition-shadow">
+              <CardHeader>
+                <div className="flex items-start justify-between">
+                  <Link href={`/dashboard/tasks/${task.id}`} className="flex-1">
+                    <CardTitle className="text-lg hover:text-primary transition-colors">
+                      {task.title}
+                    </CardTitle>
+                  </Link>
+                  <div className="flex items-center gap-2">
+                    {canDelete && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          handleDeleteClick(task);
+                        }}
+                        title="Delete task"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
+                    <Badge variant={task.priority === 'critical' ? 'destructive' : task.priority === 'high' ? 'warning' : 'secondary'}>
+                      {task.priority}
+                    </Badge>
+                  </div>
+                </div>
+                {task.description && (
+                  <p className="text-sm text-muted-foreground line-clamp-2 mt-2">
+                    {task.description}
+                  </p>
+                )}
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <Badge variant={task.status === 'completed' ? 'success' : task.status === 'in_progress' ? 'default' : 'outline'}>
+                    {task.status.replace('_', ' ')}
+                  </Badge>
+                  {task.deadline && (
+                    <DeadlineTimer deadline={task.deadline} status={task.status} />
+                  )}
+                </div>
+
+                {task.subtasks && task.subtasks.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <ListChecks className="h-4 w-4" />
+                      <span>{task.subtasks.length} Subtask{task.subtasks.length !== 1 ? 's' : ''}</span>
+                    </div>
+                    <div className="space-y-1">
+                      {task.subtasks.slice(0, 3).map((subtask) => (
+                        <div key={subtask.id} className="flex items-center gap-2 text-sm">
+                          <div className={cn(
+                            "h-2 w-2 rounded-full",
+                            subtask.status === 'completed' ? 'bg-green-500' : 'bg-gray-300'
+                          )} />
+                          <span className={cn(
+                            "flex-1 truncate",
+                            subtask.status === 'completed' && 'line-through text-muted-foreground'
+                          )}>
+                            {subtask.title}
+                          </span>
+                        </div>
+                      ))}
+                      {task.subtasks.length > 3 && (
+                        <p className="text-xs text-muted-foreground">
+                          +{task.subtasks.length - 3} more subtasks
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Progress</span>
+                    <span className="font-medium">{task.progress || 0}%</span>
+                  </div>
+                  <div className="w-full bg-secondary rounded-full h-2">
+                    <div
+                      className="bg-primary h-2 rounded-full transition-all"
+                      style={{ width: `${task.progress || 0}%` }}
+                    />
+                  </div>
+                </div>
+
+                {task.assigned_users && (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Users className="h-4 w-4" />
+                    <span className="truncate">{task.assigned_users}</span>
+                  </div>
+                )}
+
+                <div className="pt-2 border-t">
+                  <Button variant="outline" size="sm" className="w-full" asChild>
+                    <Link href={`/dashboard/tasks/${task.id}`}>
+                      View Details
+                    </Link>
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {/* Create Task Dialog */}
+      <Dialog open={showCreateModal} onOpenChange={handleClose}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto bg-white border-2 shadow-2xl">
+          <DialogHeader>
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-primary/10 rounded-lg">
+                <CheckSquare className="h-5 w-5 text-primary" />
+              </div>
+              <div>
+                <DialogTitle className="text-2xl font-bold">Create New Task</DialogTitle>
+                <DialogDescription className="mt-1 text-base">
+                  Create a task with subtasks and set deadlines
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+
+          <form onSubmit={handleCreate} className="space-y-6 pt-4">
+            {error && (
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription className="font-medium">{error}</AlertDescription>
+              </Alert>
+            )}
+
+            {/* Basic Information */}
+            <div className="space-y-4 p-4 bg-gray-50 rounded-lg border">
+              <div className="flex items-center gap-2 pb-2">
+                <CheckSquare className="h-5 w-5 text-primary" />
+                <h3 className="text-lg font-semibold text-foreground">Task Information</h3>
+              </div>
+              <Separator className="mb-4" />
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2 md:col-span-2">
+                  <Label htmlFor="title" className="text-sm font-medium">
+                    Task Title <span className="text-destructive">*</span>
+                  </Label>
+                  <Input
+                    id="title"
+                    type="text"
+                    required
+                    value={formData.title}
+                    onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                    placeholder="Enter task title"
+                    disabled={submitting}
+                    className="h-11"
+                  />
+                </div>
+
+                {/* <div className="space-y-2 md:col-span-2">
+                  <Label htmlFor="description" className="text-sm font-medium">
+                    Description
+                  </Label>
+                  <textarea
+                    id="description"
+                    value={formData.description}
+                    onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                    placeholder="Enter task description"
+                    disabled={submitting}
+                    className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                    rows="3"
+                  />
+                </div> */}
+
+                <div className="space-y-2">
+                  <Label htmlFor="priority" className="text-sm font-medium">
+                    Priority
+                  </Label>
+                  <Select
+                    value={formData.priority}
+                    onValueChange={(value) => setFormData({ ...formData, priority: value })}
+                    disabled={submitting}
+                  >
+                    <SelectTrigger id="priority" className="h-11">
+                      <SelectValue placeholder="Select priority" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="low">Low</SelectItem>
+                      <SelectItem value="medium">Medium</SelectItem>
+                      <SelectItem value="high">High</SelectItem>
+                      <SelectItem value="critical">Critical</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="deadline" className="text-sm font-medium flex items-center gap-2">
+                    <Calendar className="h-4 w-4 text-muted-foreground" />
+                    Deadline
+                  </Label>
+                  <Input
+                    id="deadline"
+                    type="datetime-local"
+                    value={formData.deadline}
+                    onChange={(e) => setFormData({ ...formData, deadline: e.target.value })}
+                    disabled={submitting}
+                    className="h-11"
+                  />
+                </div>
+
+                <div className="space-y-2 md:col-span-2">
+                  <Label htmlFor="assigned_users" className="text-sm font-medium flex items-center gap-2">
+                    <Users className="h-4 w-4 text-muted-foreground" />
+                    Assign To
+                  </Label>
+                  <select
+                    id="assigned_users"
+                    multiple
+                    value={formData.assigned_users.map(String)}
+                    onChange={(e) => {
+                      const selected = Array.from(e.target.selectedOptions, option => parseInt(option.value));
+                      setFormData({ ...formData, assigned_users: selected });
+                    }}
+                    disabled={submitting}
+                    className="flex h-32 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {(() => {
+                      // Group employees by role
+                      const employeesByRole = employees
+                        .filter(emp => emp.role !== 'Super Admin' && emp.is_active !== 0)
+                        .reduce((acc, emp) => {
+                          const role = emp.role || 'Other';
+                          if (!acc[role]) {
+                            acc[role] = [];
+                          }
+                          acc[role].push(emp);
+                          return acc;
+                        }, {});
+
+                      // Sort roles and render
+                      const sortedRoles = Object.keys(employeesByRole).sort();
+                      
+                      return sortedRoles.map(role => (
+                        <optgroup key={role} label={role}>
+                          {employeesByRole[role]
+                            .sort((a, b) => a.name.localeCompare(b.name))
+                            .map(emp => (
+                              <option key={emp.id} value={emp.id}>
+                                {emp.name} {emp.department ? `- ${emp.department}` : ''}
+                              </option>
+                            ))}
+                        </optgroup>
+                      ));
+                    })()}
+                  </select>
+                  <p className="text-xs text-muted-foreground">Hold Ctrl/Cmd to select multiple. Employees are grouped by role.</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Subtasks Section */}
+            <div className="space-y-4 p-4 bg-gray-50 rounded-lg border">
+              <div className="flex items-center justify-between pb-0">
+                <div className="flex items-center gap-2">
+                  <ListChecks className="h-5 w-5 text-primary" />
+                  <h3 className="text-lg font-semibold text-foreground">Subtasks</h3>
+                </div>
+                <Badge variant="secondary">{formData.subtasks.length} Added</Badge>
+              </div>
+                  <p className="text-xs text-muted-foreground">[It is Mandatory to add Subtasks for Completion Status]</p>
+              <Separator className="mb-4" />
+
+              {/* Add Subtask */}
+              <div className="space-y-2 p-3 bg-background rounded-lg border-2 border-dashed">
+                <Label className="text-sm font-medium">Add New Subtask</Label>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  <Input
+                    type="text"
+                    value={newSubtask.title}
+                    onChange={(e) => setNewSubtask({ ...newSubtask, title: e.target.value })}
+                    placeholder="Subtask title"
+                    disabled={submitting}
+                    className="h-10"
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        addSubtask();
+                      }
+                    }}
+                  />
+                  <div className="flex gap-2">
+                    <Input
+                      type="text"
+                      value={newSubtask.description}
+                      onChange={(e) => setNewSubtask({ ...newSubtask, description: e.target.value })}
+                      placeholder="Description (optional)"
+                      disabled={submitting}
+                      className="h-10"
+                      onKeyPress={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          addSubtask();
+                        }
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      onClick={addSubtask}
+                      disabled={!newSubtask.title.trim() || submitting}
+                      size="icon"
+                      className="h-10 w-10"
+                    >
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Subtasks List */}
+              {formData.subtasks.length > 0 && (
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {formData.subtasks.map((subtask, index) => (
+                    <div
+                      key={index}
+                      className="flex items-start gap-3 p-3 bg-background rounded-lg border"
+                    >
+                      <div className="flex-1">
+                        <p className="font-medium text-sm">{subtask.title}</p>
+                        {subtask.description && (
+                          <p className="text-xs text-muted-foreground mt-1">{subtask.description}</p>
+                        )}
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => removeSubtask(index)}
+                        disabled={submitting}
+                        className="h-8 w-8"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <DialogFooter className="gap-2 sm:gap-0 pt-4 border-t bg-gray-50 -mx-6 -mb-6 px-6 pb-6 mt-6">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleClose}
+                disabled={submitting}
+                className="min-w-[100px]"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={submitting}
+                className="gap-2 min-w-[120px]"
+              >
+                {submitting ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Creating...
+                  </>
+                ) : (
+                  <>
+                    <CheckSquare className="h-4 w-4" />
+                    Create Task
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={deleteDialogOpen} onOpenChange={handleDeleteCancel}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertCircle className="h-5 w-5" />
+              Delete Task
+            </DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete this task? This action cannot be undone.
+            </DialogDescription>
+            {taskToDelete && (
+              <div className="mt-4 p-3 bg-muted rounded-md">
+                <div className="font-semibold">{taskToDelete.title}</div>
+                {taskToDelete.description && (
+                  <div className="text-sm text-muted-foreground mt-1 line-clamp-2">
+                    {taskToDelete.description}
+                  </div>
+                )}
+              </div>
+            )}
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={handleDeleteCancel}
+              disabled={deleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteConfirm}
+              disabled={deleting}
+            >
+              {deleting ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Delete
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
